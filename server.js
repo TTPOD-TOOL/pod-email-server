@@ -58,12 +58,16 @@ function fetchInbox(storeConfig, options = {}) {
 
           // Get last N emails
           const fetchUids = uids.slice(-limit).reverse();
-          const fetch = imap.fetch(fetchUids, { bodies: '', struct: true });
+          const fetch = imap.fetch(fetchUids, { bodies: '', struct: true, markSeen: false });
 
           fetch.on('message', (msg) => {
             let buffer = '';
             let uid;
-            msg.on('attributes', attrs => { uid = attrs.uid; });
+            let isSeen = false;
+            msg.on('attributes', attrs => {
+              uid = attrs.uid;
+              isSeen = (attrs.flags || []).some(f => f.toLowerCase() === '\\seen');
+            });
             msg.on('body', stream => {
               stream.on('data', chunk => { buffer += chunk.toString('utf8'); });
             });
@@ -81,6 +85,7 @@ function fetchInbox(storeConfig, options = {}) {
                   text: parsed.text || '',
                   html: parsed.html || '',
                   snippet: (parsed.text || '').slice(0, 200).replace(/\n/g, ' '),
+                  seen: isSeen,
                 });
               }).catch(() => {});
             });
@@ -274,6 +279,36 @@ app.post('/send/:storeId', auth, async (req, res) => {
     console.error('Send error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// POST /mark-seen/:storeId/:uid — Đánh dấu email đã đọc
+app.post('/mark-seen/:storeId/:uid', auth, async (req, res) => {
+  const store = getStore(req.params.storeId);
+  if (!store) return res.status(404).json({ error: 'Store not found' });
+
+  const uid = parseInt(req.params.uid);
+  const folder = req.body?.folder || 'INBOX';
+
+  return new Promise((resolve) => {
+    const imap = new Imap({
+      user: store.email, password: store.password,
+      host: store.imap_host, port: store.imap_port,
+      tls: true, tlsOptions: { rejectUnauthorized: false },
+      connTimeout: 15000,
+    });
+    imap.once('ready', () => {
+      imap.openBox(folder, false, (err) => {
+        if (err) { imap.end(); res.json({ success: false, error: err.message }); return resolve(); }
+        imap.addFlags([uid], ['\\Seen'], (err) => {
+          imap.end();
+          res.json({ success: !err });
+          resolve();
+        });
+      });
+    });
+    imap.once('error', (err) => { res.json({ success: false, error: err.message }); resolve(); });
+    imap.connect();
+  });
 });
 
 // POST /test/:storeId — Test kết nối IMAP/SMTP
