@@ -33,7 +33,7 @@ function getStore(storeId) {
 // ── IMAP: Fetch inbox ─────────────────────────────────
 function fetchInbox(storeConfig, options = {}) {
   return new Promise((resolve, reject) => {
-    const { limit = 20, folder = 'INBOX', searchCriteria = ['ALL'] } = options;
+    const { limit = 20, folder = 'INBOX', searchCriteria = ['ALL'], unreadOnly = false } = options;
 
     const imap = new Imap({
       user: storeConfig.email,
@@ -66,7 +66,13 @@ function fetchInbox(storeConfig, options = {}) {
             let isSeen = false;
             msg.on('attributes', attrs => {
               uid = attrs.uid;
-              isSeen = (attrs.flags || []).some(f => f.toLowerCase() === '\\seen');
+              const flags = attrs.flags || [];
+              isSeen = flags.some(f => 
+                f === '\\Seen' || 
+                f === '\\seen' || 
+                f.toLowerCase() === '\\seen' ||
+                f.toLowerCase() === 'seen'
+              );
             });
             msg.on('body', stream => {
               stream.on('data', chunk => { buffer += chunk.toString('utf8'); });
@@ -185,10 +191,20 @@ app.get('/inbox/:storeId', auth, async (req, res) => {
   if (!store) return res.status(404).json({ error: 'Store not found' });
 
   try {
-    const limit = parseInt(req.query.limit) || 20;
+    const limit = parseInt(req.query.limit) || 50;
     const folder = req.query.folder || 'INBOX';
-    const emails = await fetchInbox(store, { limit, folder });
-    res.json({ success: true, emails, store: store.name });
+    // Fetch all then filter, OR use UNSEEN search
+    const [allEmails, unreadEmails] = await Promise.all([
+      fetchInbox(store, { limit, folder, searchCriteria: ['ALL'] }),
+      fetchInbox(store, { limit, folder, searchCriteria: ['UNSEEN'] }),
+    ]);
+    // Mark emails as seen/unseen based on UNSEEN search result
+    const unreadUids = new Set(unreadEmails.map(e => e.uid));
+    const emails = allEmails.map(e => ({
+      ...e,
+      seen: !unreadUids.has(e.uid)
+    }));
+    res.json({ success: true, emails, store: store.name, unreadCount: unreadUids.size });
   } catch(e) {
     console.error('Inbox error:', e.message);
     res.status(500).json({ error: e.message });
