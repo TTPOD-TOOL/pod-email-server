@@ -159,15 +159,20 @@ function fetchEmailByUid(storeConfig, uid, folder = 'INBOX') {
 
 // ── SMTP: Send email ──────────────────────────────────
 async function sendEmail(storeConfig, mailOptions) {
+  const port = storeConfig.smtp_port || 587;
   const transporter = nodemailer.createTransport({
     host: storeConfig.smtp_host,
-    port: storeConfig.smtp_port,
-    secure: storeConfig.smtp_port === 465,
+    port: port,
+    secure: port === 465,
+    requireTLS: port === 587,
     auth: {
       user: storeConfig.email,
       pass: storeConfig.password,
     },
     tls: { rejectUnauthorized: false },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   });
 
   const info = await transporter.sendMail({
@@ -345,12 +350,15 @@ app.post('/test/:storeId', auth, async (req, res) => {
 
   // Test SMTP
   try {
+    const tport = store.smtp_port || 587;
     const transporter = nodemailer.createTransport({
       host: store.smtp_host,
-      port: store.smtp_port,
-      secure: store.smtp_port === 465,
+      port: tport,
+      secure: tport === 465,
+      requireTLS: tport === 587,
       auth: { user: store.email, pass: store.password },
       tls: { rejectUnauthorized: false },
+      connectionTimeout: 10000,
     });
     await transporter.verify();
     results.smtp = true;
